@@ -40,16 +40,14 @@ class DevNode:
     def __init__(self, dev_type, name, full_cores=None):
         self.type = dev_type
         self.name = name
-        self.parent = None
         self.full_cores = full_cores
         self.unused_cores = 0
         self.children = {}
 
     def add_child(self, node):
         self.children[node.name] = node
-        node.parent = self
 
-    def has_child(self, name):
+    def has_child(self, name) -> bool:
         return name in self.children
 
     def free_cores_group(self) -> [int]:
@@ -67,6 +65,9 @@ class DevNode:
 
 
 class QueueInfo:
+    """
+    pbs queue info
+    """
     def __init__(self, queue, host, socket, vnode):
         self.root = DevNode('cluster', 'root')
         self.name = queue
@@ -112,7 +113,7 @@ class QueueInfo:
                 cur_node = node
 
     @property
-    def load(self):
+    def load(self) -> float:
         """
         queue load = (using_cores + waiting_cores)/(using_cores + free_cores)
         """
@@ -122,11 +123,14 @@ class QueueInfo:
         try:
             l = round((using_cores + waiting_cores) / (using_cores + free_cores), 2)
         except ZeroDivisionError:
-            l = 0
+            l = 0.0
         return l
 
-    def export(self):
-        result = {}
+    def export(self) -> dict:
+        """
+        dump queue info to dict
+        """
+        result = {'queue': self.name}
         result.update(self.counter)
         result['free_cores_group'] = self.root.free_cores_group()
         result['load'] = self.load
@@ -134,6 +138,9 @@ class QueueInfo:
 
 
 def pbs_data() -> dict:
+    """
+    raw pbs data
+    """
     logging.debug('getting data from pbs')
     pbs_server = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Bf -F json'))
     pbs_queues = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Qf -F json'))
@@ -143,6 +150,9 @@ def pbs_data() -> dict:
 
 
 def pbs_data_ex(raw_data: dict):
+    """
+    parse and update raw pbs data
+    """
     logging.debug('parsing pbs data')
     extra_data = {}
     for q, queue_data in raw_data["Queue"].items():
@@ -180,7 +190,7 @@ def pbs_data_ex(raw_data: dict):
             queue.counter.update(using_cores=cores)
         elif state == 'Q':
             queue.counter.update(waiting_cores=cores)
-
+    # update raw data
     for q, queue_info in extra_data.items():
         adv_data = queue_info.export()
         logging.debug(f'queue {q} statistics:')
@@ -199,11 +209,12 @@ if __name__ == '__main__':
     except Exception as e:
         logging.error(f"can not load configuration: {str(e)}")
         exit(-1)
-    conns = {k: redis.ConnectionPool(**v) for k, v in config['redis'].items()}
+    location = config['location']
+    conns = [(redis.ConnectionPool(**conf), conf['host']) for conf in config['redis']]
     data = pbs_data()
     pbs_data_ex(data)
-    for location, con in conns.items():
-        logging.info(f'saving data in {location}')
+    for con, host in conns:
+        logging.info(f'saving data in {host}')
         try:
             r = redis.Redis(connection_pool=con)
             j = r.json()
