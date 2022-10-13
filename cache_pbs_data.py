@@ -220,4 +220,4 @@ if __name__ == '__main__':
             j = r.json()
             j.set(location, '$', data)
         except Exception as e:
-            logging.error(f'redis at {location} error: {str(e)}')
+            logging.error(f'redis at {host} error: {str(e)}')
