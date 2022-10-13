@@ -204,6 +204,9 @@ if __name__ == '__main__':
     pbs_data_ex(data)
     for location, con in conns.items():
         logging.info(f'saving data in {location}')
-        r = redis.Redis(connection_pool=con)
-        j = r.json()
-        j.set(location, '$', data)
+        try:
+            r = redis.Redis(connection_pool=con)
+            j = r.json()
+            j.set(location, '$', data)
+        except Exception as e:
+            logging.error(f'redis at {location} error: {str(e)}')
