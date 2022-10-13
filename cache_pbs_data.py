@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3.8
 # author: thuhak.zhou@nio.com
 """
 save pbs data into redis cache
@@ -134,7 +134,7 @@ class QueueInfo:
 
 
 def pbs_data() -> dict:
-    logging.info('getting data from pbs')
+    logging.debug('getting data from pbs')
     pbs_server = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Bf -F json'))
     pbs_queues = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Qf -F json'))
     pbs_nodes = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/pbsnodes -avj -F json'))
@@ -143,6 +143,7 @@ def pbs_data() -> dict:
 
 
 def pbs_data_ex(raw_data: dict):
+    logging.debug('parsing pbs data')
     extra_data = {}
     for q, queue_data in raw_data["Queue"].items():
         queue_config = jmespath.search(
@@ -198,13 +199,11 @@ if __name__ == '__main__':
     except Exception as e:
         logging.error(f"can not load configuration: {str(e)}")
         exit(-1)
-    conns = [(redis.ConnectionPool(**redis_conf), redis_conf['host']) for redis_conf in config['redis']]
-    logging.info('getting data from pbs server')
+    conns = {k: redis.ConnectionPool(**v) for k, v in config['redis'].items()}
     data = pbs_data()
     pbs_data_ex(data)
-    pbs_server = data['pbs_server']
-    for con, server in conns:
-        logging.info(f'saving data in {server}')
+    for location, con in conns.items():
+        logging.info(f'saving data in {location}')
         r = redis.Redis(connection_pool=con)
         j = r.json()
-        j.set(pbs_server, '$', data)
+        j.set(location, '$', data)

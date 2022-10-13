@@ -1,0 +1,8 @@
+[Unit]
+Description=save pbs data to cache
+After=redis.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/pbs_cache
+ExecStart=/opt/pbs_cache/update_pbs_cache.sh

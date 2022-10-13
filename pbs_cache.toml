@@ -1,4 +1,15 @@
-[[redis]]
-host = "127.0.0.1"
-username = "user"
+[api]
+user = "user"
 password = "password"
+location = 'sh'
+
+[redis]
+    [redis.sh]
+    host = "127.0.0.1"
+    username = "user"
+    password = "password"
+
+    [redis.hf]
+    host = "10.2.3.4"
+    username = "user"
+    password = "password"

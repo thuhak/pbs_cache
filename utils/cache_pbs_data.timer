@@ -1,0 +1,9 @@
+[Unit]
+Description=cache pbs data every minute
+
+[Timer]
+OnStartupSec=1m
+OnUnitActiveSec=1m
+
+[Install]
+WantedBy=multi-user.target
