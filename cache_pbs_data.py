@@ -210,7 +210,7 @@ if __name__ == '__main__':
         logging.error(f"can not load configuration: {str(e)}")
         exit(-1)
     location = config['location']
-    conns = [(redis.ConnectionPool(**conf), conf['host']) for conf in config['redis']]
+    conns = [(redis.ConnectionPool(**conf), host) for host, conf in config['redis'].items()]
     data = pbs_data()
     pbs_data_ex(data)
     for con, host in conns:

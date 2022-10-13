@@ -4,12 +4,13 @@ location = "{{ location }}"
 user = "user"
 password = "password"
 
-[[redis]]
-host = "10.2.3.4"
-username = "user"
-password = "password"
+[redis]
+    [redis.hf]
+    host = "10.2.3.4"
+    username = "user"
+    password = "password"
 
-[[redis]]
-host = "10.2.3.5"
-username = "user"
-password = "password"
+    [redis.sh]
+    host = "10.2.3.5"
+    username = "user"
+    password = "password"
