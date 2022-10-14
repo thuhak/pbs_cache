@@ -62,7 +62,10 @@ def check_expire(j, site):
 
 
 @app.get('/')
-def get_site(cred=Depends(get_current_username)):
+def get_site_list(cred=Depends(get_current_username)):
+    """
+    get HPC sites
+    """
     result = {'result': True}
     try:
         r = redis.Redis(connection_pool=conn)
@@ -74,7 +77,10 @@ def get_site(cred=Depends(get_current_username)):
 
 
 @app.get('/{site}/')
-def get_site_list(site: str, cred=Depends(get_current_username)):
+def get_full_data(site: str, cred=Depends(get_current_username)):
+    """
+    get all data of site
+    """
     result = {'result': True}
     try:
         r = redis.Redis(connection_pool=conn)
@@ -91,6 +97,9 @@ def get_site_list(site: str, cred=Depends(get_current_username)):
 
 @app.get('/{site}/{subject}/')
 def get_subject_data(site: str, subject: Subject, cred=Depends(get_current_username)):
+    """
+    get all data for the specified subject
+    """
     result = {'result': True}
     try:
         r = redis.Redis(connection_pool=conn)
@@ -106,7 +115,10 @@ def get_subject_data(site: str, subject: Subject, cred=Depends(get_current_usern
 
 
 @app.get('/{site}/{subject}/{name}/')
-def get_data(site: str, subject: Subject, name: str, item: str = None, cred=Depends(get_current_username)):
+def get_detail_data(site: str, subject: Subject, name: str, item: str = None, cred=Depends(get_current_username)):
+    """
+    get detail data
+    """
     result = {'result': True}
     name = trans_key(name)
     try:
