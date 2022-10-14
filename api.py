@@ -7,12 +7,12 @@ import secrets
 import time
 import logging
 from enum import Enum
+from typing import Union
 
 import toml
 import redis
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-
 
 with open('/etc/pbs_cache.toml') as f:
     config = toml.load(f)
@@ -115,7 +115,8 @@ def get_subject_data(site: str, subject: Subject, cred=Depends(get_current_usern
 
 
 @app.get('/{site}/{subject}/{name}/')
-def get_detail_data(site: str, subject: Subject, name: str, item: str = None, cred=Depends(get_current_username)):
+def get_detail_data(site: str, subject: Subject, name: str, item: Union[str, None] = None,
+                    cred=Depends(get_current_username)):
     """
     get detail data
     """
@@ -128,9 +129,12 @@ def get_detail_data(site: str, subject: Subject, name: str, item: str = None, cr
         if check['result'] is False:
             return check
         root = '$' if name == '*' else ''
-        search_str = f'{root}.{subject.name}.{name}'
-        if item:
-            search_str += f'.{item}'
+        if subject is Subject.nodes:
+            search_str = f'$.nodes.*[?(@.Mom=="{name}")]'
+        else:
+            search_str = f'{root}.{subject.name}.{name}'
+            if item:
+                search_str += f'.{item}'
         logging.debug(f'searching expression:{search_str}')
         data = j.get(site, search_str)
         if not data:
