@@ -16,6 +16,7 @@ import jmespath
 parser = ArgumentParser(description=__doc__)
 parser.add_argument('-c', '--config', default='/etc/pbs_cache.toml', help='config file')
 parser.add_argument('-l', '--log_level', choices=['debug', 'info', 'error'], default='info', help='debug level')
+replacement = [('.', '_'), ('[', '_'), (']', '')]
 
 
 def safety_loads(data: str) -> dict:
@@ -30,6 +31,12 @@ def safety_loads(data: str) -> dict:
             l = data.split('\n')
             l.pop(e.lineno - 1)
             data = '\n'.join(l)
+
+
+def trans_key(key: str) -> str:
+    for a, b in replacement:
+        key = key.replace(a, b)
+    return key
 
 
 class DevNode:
@@ -137,32 +144,25 @@ class QueueInfo:
         return result
 
 
-def pbs_data() -> dict:
+def pbs_data_ex() -> dict:
     """
-    raw pbs data
+    parse and update pbs data
     """
     logging.debug('getting data from pbs')
     pbs_server = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Bf -F json'))
     pbs_queues = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Qf -F json'))
     pbs_nodes = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/pbsnodes -avj -F json'))
     pbs_jobs = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -f -F json'))
-    return {**pbs_server, **pbs_nodes, **pbs_jobs, **pbs_queues}
-
-
-def pbs_data_ex(raw_data: dict):
-    """
-    parse and update raw pbs data
-    """
     logging.debug('parsing pbs data')
     extra_data = {}
-    for q, queue_data in raw_data["Queue"].items():
+    for q, queue_data in pbs_queues["Queue"].items():
         queue_config = jmespath.search(
             'resources_available.{host: ncpu_perhost, vnode: ncpu_pernode, socket: ncpu_pernuma}', queue_data)
         if not queue_config:
             logging.warning(f'queue {q} is not well configured')
             continue
         extra_data[q] = QueueInfo(q, **queue_config)
-    for vnode, node_data in raw_data["nodes"].items():
+    for vnode, node_data in pbs_nodes["nodes"].copy().items():
         if q := node_data.get('queue'):
             queues = [q]
         elif q := jmespath.search("resources_available.Qlist", node_data):
@@ -178,7 +178,8 @@ def pbs_data_ex(raw_data: dict):
         for q in queues:
             if queue := extra_data.get(q):
                 queue.add_vnode(all_cores, assigned_cores, is_offline, is_private, **devices)
-    for job, job_data in raw_data['Jobs'].items():
+        pbs_nodes['nodes'][trans_key(vnode)] = pbs_nodes['nodes'].pop(vnode)
+    for job, job_data in pbs_jobs['Jobs'].copy().items():
         q = job_data["queue"]
         if q not in extra_data:
             logging.error(f'queue {q} is not well configured')
@@ -190,12 +191,14 @@ def pbs_data_ex(raw_data: dict):
             queue.counter.update(using_cores=cores)
         elif state == 'Q':
             queue.counter.update(waiting_cores=cores)
+        pbs_jobs['Jobs'][trans_key(job)] = pbs_jobs['Jobs'].pop(job)
     # update raw data
     for q, queue_info in extra_data.items():
         adv_data = queue_info.export()
         logging.debug(f'queue {q} statistics:')
         logging.debug(json.dumps(adv_data, indent=True))
-        raw_data['Queue'][q]['statistics'] = adv_data
+        pbs_queues['Queue'][q]['statistics'] = adv_data
+    return {**pbs_server, **pbs_queues, **pbs_nodes, **pbs_jobs}
 
 
 if __name__ == '__main__':
@@ -211,8 +214,7 @@ if __name__ == '__main__':
         exit(-1)
     location = config['location']
     conns = [(redis.ConnectionPool(**conf), host) for host, conf in config['redis'].items()]
-    data = pbs_data()
-    pbs_data_ex(data)
+    data = pbs_data_ex()
     for con, host in conns:
         logging.info(f'saving data in {host}')
         try:
