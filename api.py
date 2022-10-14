@@ -133,8 +133,8 @@ def get_detail_data(site: str, subject: Subject, name: str, item: Union[str, Non
             search_str = f'$.nodes.*[?(@.Mom=="{name}")]'
         else:
             search_str = f'{root}.{subject.name}.{name}'
-            if item:
-                search_str += f'.{item}'
+        if item:
+            search_str += f'.{item}'
         logging.debug(f'searching expression:{search_str}')
         data = j.get(site, search_str)
         if not data:
