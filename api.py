@@ -137,11 +137,7 @@ def get_detail_data(site: str, subject: Subject, name: str, item: Union[str, Non
             search_str += f'.{item}'
         logging.debug(f'searching expression:{search_str}')
         data = j.get(site, search_str)
-        if not data:
-            result['result'] = False
-            result['error_msg'] = 'unable to search for data'
-        else:
-            result['data'] = data
+        result['data'] = data
     except Exception as e:
         result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
     return result
