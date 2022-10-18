@@ -39,6 +39,11 @@ def trans_key(key: str) -> str:
     return key
 
 
+def get_resource_list(res: str, data: dict) -> list:
+    raw = jmespath.search(f'resources_available."{res}"', data)
+    return raw.split(',') if raw else []
+
+
 class DevNode:
     """
     ibswitch, host, socket, vnode
@@ -75,7 +80,8 @@ class QueueInfo:
     """
     pbs queue info
     """
-    def __init__(self, queue, host, socket, vnode):
+
+    def __init__(self, queue: str, host: int, socket: int, vnode: int):
         self.root = DevNode('cluster', 'root')
         self.name = queue
         self.counter = Counter(min_cores=0,
@@ -161,6 +167,9 @@ def pbs_data_ex() -> dict:
         if not queue_config:
             logging.warning(f'queue {q} is not well configured')
             continue
+        queue_data['name'] = q
+        queue_data['apps'] = get_resource_list('App', queue_data)
+        queue_data['teams'] = get_resource_list('Team', queue_data)
         extra_data[q] = QueueInfo(q, **queue_config)
     for vnode, node_data in pbs_nodes["nodes"].copy().items():
         if q := node_data.get('queue'):
@@ -180,6 +189,7 @@ def pbs_data_ex() -> dict:
                 queue.add_vnode(all_cores, assigned_cores, is_offline, is_private, **devices)
         pbs_nodes['nodes'][trans_key(vnode)] = pbs_nodes['nodes'].pop(vnode)
     for job, job_data in pbs_jobs['Jobs'].copy().items():
+        job_data['id'] = job
         q = job_data["queue"]
         if q not in extra_data:
             logging.error(f'queue {q} is not well configured')
@@ -191,7 +201,8 @@ def pbs_data_ex() -> dict:
             queue.counter.update(using_cores=cores)
         elif state == 'Q':
             queue.counter.update(waiting_cores=cores)
-        pbs_jobs['Jobs'][trans_key(job)] = pbs_jobs['Jobs'].pop(job)
+        pbs_jobs['Jobs'].pop(job)
+        pbs_jobs['Jobs'][trans_key(job)] = job_data
     # update raw data
     for q, queue_info in extra_data.items():
         adv_data = queue_info.export()
