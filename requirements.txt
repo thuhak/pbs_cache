@@ -3,3 +3,4 @@ redis==4.3.4
 jmespath==0.10.0
 fastapi==0.75.0
 uvicorn==0.18.3
+python-freeipa==1.0.6
