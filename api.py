@@ -37,6 +37,11 @@ class Subject(Enum):
     nodes = 'nodes'
 
 
+class UserInfo(Enum):
+    jobs = 'jobs'
+    groups = 'groups'
+
+
 Site = Enum('Site', {k['location']: k['location'] for k in config['site']})
 
 
@@ -78,7 +83,7 @@ def get_site_list(cred=Depends(get_current_username)):
     return {'result': True, 'site': config['site']}
 
 
-@app.get('/pbs/{site}/')
+@app.get('/pbs/{site}')
 def get_full_data(site: Site, cred=Depends(get_current_username)):
     """
     get all data of site
@@ -98,8 +103,8 @@ def get_full_data(site: Site, cred=Depends(get_current_username)):
     return result
 
 
-@app.get('/pbs/{site}/{subject}/')
-def get_subject_data(site: Site, subject: Subject, cred=Depends(get_current_username)):
+@app.get('/pbs/{site}/{subject}')
+def get_list(site: Site, subject: Subject, cred=Depends(get_current_username)):
     """
     get all data for the specified subject
     """
@@ -111,16 +116,27 @@ def get_subject_data(site: Site, subject: Subject, cred=Depends(get_current_user
         check = check_expire(j, site)
         if check['result'] is False:
             return check
-        data = j.get(site, f'.{subject}')
-        result[subject] = data
+        data = j.get(site, f'.{subject.name}')
+        keys = list(data.keys())
+        if subject is Subject.Jobs:
+            result['count'] = len(keys)
+            result['data'] = [s.replace('_', '.', 1) for s in keys]
+        elif subject is Subject.nodes:
+            result['count'] = len(keys)
+            result['data'] = list({s.split('_')[0] for s in keys})
+        elif subject is Subject.Queue:
+            result['count'] = len(keys)
+            result['data'] = keys
+        else:
+            result['data'] = list(data.values())[0]
     except Exception as e:
         result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
     return result
 
 
-@app.get('/pbs/{site}/{subject}/{name}/')
-def get_detail_data(site: Site, subject: Subject, name: str, item: Union[List[str], None] = Query(default=None),
-                    cred=Depends(get_current_username)):
+@app.get('/pbs/{site}/{subject}/{name}')
+def get_data(site: Site, subject: Subject, name: str, item: Union[List[str], None] = Query(default=None),
+             cred=Depends(get_current_username)):
     """
     get detail data
     """
@@ -151,7 +167,7 @@ def get_detail_data(site: Site, subject: Subject, name: str, item: Union[List[st
     return result
 
 
-@app.get('/user/')
+@app.get('/user')
 def get_user_list(group: str = 'hpc', cred=Depends(get_current_username)):
     """
     get user list
@@ -169,45 +185,48 @@ def get_user_list(group: str = 'hpc', cred=Depends(get_current_username)):
 
 
 @app.get('/user/{username}')
-def get_user_info(username: str, cred=Depends(get_current_username)):
+def get_user_info(username: str, info: UserInfo = UserInfo.groups, cred=Depends(get_current_username)):
     """
     get user data
     """
     result = {'result': True}
     data = {}
-    try:
-        ipa.login(config['ipa']['user'], config['ipa']['password'])
-        user_data = ipa.user_show(username)['result']
-        group = user_data.get('memberof_group', []) + user_data.get('memberofindirect_group', [])
-        if 'hpc' not in group:
+    print(info)
+    if info is UserInfo.groups:
+        try:
+            ipa.login(config['ipa']['user'], config['ipa']['password'])
+            user_data = ipa.user_show(username)['result']
+            group = user_data.get('memberof_group', []) + user_data.get('memberofindirect_group', [])
+            if 'hpc' not in group:
+                result['result'] = False
+                result['error_msg'] = 'invalid user'
+                return JSONResponse(status_code=404, content=result)
+            data['group'] = group
+            gid = user_data['gidnumber'][0]
+            if user_data['uidnumber'][0] == gid:
+                data['main_group'] = None
+            else:
+                group_info = ipa.group_find(o_gidnumber=gid)
+                data['main_group'] = jmespath.search('result[0].cn[0]', group_info) or None
+        except Exception as e:
             result['result'] = False
-            result['error_msg'] = 'invalid user'
+            result['error_msg'] = f'{str(e)}'
             return JSONResponse(status_code=404, content=result)
-        data['group'] = group
-        gid = user_data['gidnumber'][0]
-        if user_data['uidnumber'][0] == gid:
-            data['main_group'] = None
-        else:
-            group_info = ipa.group_find(o_gidnumber=gid)
-            data['main_group'] = jmespath.search('result[0].cn[0]', group_info) or None
-    except Exception as e:
-        result['result'] = False
-        result['error_msg'] = f'{str(e)}'
-        return JSONResponse(status_code=404, content=result)
-    try:
-        r = redis.Redis(connection_pool=conn)
-        j = r.json()
-    except Exception as e:
-        return {'result': False, 'error_msg': f'backend failure, {str(e)}'}
-    jobs = []
-    for site_dict in config['site']:
-        site = site_dict['location']
-        check = check_expire(j, site)
-        if check['result'] is False:
-            return check
-        job_search = f'$.Jobs.*[?(@.euser=="{username}")].id'
-        job_list = j.get(site, job_search)
-        jobs.extend(job_list)
-    data['jobs'] = jobs
+    elif info is UserInfo.jobs:
+        try:
+            r = redis.Redis(connection_pool=conn)
+            j = r.json()
+        except Exception as e:
+            return {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+        jobs = []
+        for site_dict in config['site']:
+            site = site_dict['location']
+            check = check_expire(j, site)
+            if check['result'] is False:
+                return check
+            job_search = f'$.Jobs.*[?(@.euser=="{username}")].id'
+            job_list = j.get(site, job_search)
+            jobs.extend(job_list)
+        data['jobs'] = jobs
     result['data'] = data
     return result
