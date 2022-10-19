@@ -7,12 +7,16 @@ import secrets
 import time
 import logging
 from enum import Enum
-from typing import Union
+import json
+from typing import Union, List
 
+import jmespath
 import toml
 import redis
 from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from fastapi.responses import JSONResponse
+from python_freeipa import ClientMeta
 
 with open('/etc/pbs_cache.toml') as f:
     config = toml.load(f)
@@ -20,6 +24,8 @@ app = FastAPI()
 security = HTTPBasic()
 location = config['location']
 redis_conf = config['redis'][location]
+logger = logging.getLogger()
+ipa = ClientMeta(config['ipa']['host'], verify_ssl=False)
 conn = redis.ConnectionPool(**redis_conf)
 replacement = [('.', '_'), ('[', '_'), (']', '')]
 
@@ -29,6 +35,9 @@ class Subject(Enum):
     Queue = 'Queue'
     Jobs = 'Jobs'
     nodes = 'nodes'
+
+
+Site = Enum('Site', {k['location']: k['location'] for k in config['site']})
 
 
 def trans_key(key: str) -> str:
@@ -61,27 +70,21 @@ def check_expire(j, site):
     return result
 
 
-@app.get('/')
+@app.get('/pbs')
 def get_site_list(cred=Depends(get_current_username)):
     """
     get HPC sites
     """
-    result = {'result': True}
-    try:
-        r = redis.Redis(connection_pool=conn)
-        sites = r.keys()
-        result['sites'] = sites
-    except Exception as e:
-        result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
-    return result
+    return {'result': True, 'site': config['site']}
 
 
-@app.get('/{site}/')
-def get_full_data(site: str, cred=Depends(get_current_username)):
+@app.get('/pbs/{site}/')
+def get_full_data(site: Site, cred=Depends(get_current_username)):
     """
     get all data of site
     """
     result = {'result': True}
+    site = site.name
     try:
         r = redis.Redis(connection_pool=conn)
         j = r.json()
@@ -95,12 +98,13 @@ def get_full_data(site: str, cred=Depends(get_current_username)):
     return result
 
 
-@app.get('/{site}/{subject}/')
-def get_subject_data(site: str, subject: Subject, cred=Depends(get_current_username)):
+@app.get('/pbs/{site}/{subject}/')
+def get_subject_data(site: Site, subject: Subject, cred=Depends(get_current_username)):
     """
     get all data for the specified subject
     """
     result = {'result': True}
+    site = site.name
     try:
         r = redis.Redis(connection_pool=conn)
         j = r.json()
@@ -114,13 +118,14 @@ def get_subject_data(site: str, subject: Subject, cred=Depends(get_current_usern
     return result
 
 
-@app.get('/{site}/{subject}/{name}/')
-def get_detail_data(site: str, subject: Subject, name: str, item: Union[str, None] = None,
+@app.get('/pbs/{site}/{subject}/{name}/')
+def get_detail_data(site: Site, subject: Subject, name: str, item: Union[List[str], None] = Query(default=None),
                     cred=Depends(get_current_username)):
     """
     get detail data
     """
     result = {'result': True}
+    site = site.name
     name = trans_key(name)
     try:
         r = redis.Redis(connection_pool=conn)
@@ -128,16 +133,81 @@ def get_detail_data(site: str, subject: Subject, name: str, item: Union[str, Non
         check = check_expire(j, site)
         if check['result'] is False:
             return check
-        root = '$' if name == '*' else ''
+        root = '$' if name == '*' or item else ''
         if subject is Subject.nodes:
             search_str = f'$.nodes.*[?(@.Mom=="{name}")]'
         else:
             search_str = f'{root}.{subject.name}.{name}'
         if item:
-            search_str += f'.{item}'
-        logging.debug(f'searching expression:{search_str}')
+            search_str += f'.{json.dumps(item)}'
+
+        print(item)
+        print(f'searching expression:{search_str}')
+        logger.debug(f'searching expression:{search_str}')
         data = j.get(site, search_str)
         result['data'] = data
     except Exception as e:
         result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+    return result
+
+
+@app.get('/user/')
+def get_user_list(group: str = 'hpc', cred=Depends(get_current_username)):
+    """
+    get user list
+    """
+    result = {'result': True}
+    try:
+        ipa.login(config['ipa']['user'], config['ipa']['password'])
+        user_info = ipa.group_show(group)
+        result['data'] = jmespath.search('result.member_user', user_info)
+    except Exception as e:
+        result['result'] = False
+        result['error_msg'] = f'{str(e)}'
+        return JSONResponse(status_code=404, content=result)
+    return result
+
+
+@app.get('/user/{username}')
+def get_user_info(username: str, cred=Depends(get_current_username)):
+    """
+    get user data
+    """
+    result = {'result': True}
+    data = {}
+    try:
+        ipa.login(config['ipa']['user'], config['ipa']['password'])
+        user_data = ipa.user_show(username)['result']
+        group = user_data.get('memberof_group', []) + user_data.get('memberofindirect_group', [])
+        if 'hpc' not in group:
+            result['result'] = False
+            result['error_msg'] = 'invalid user'
+            return JSONResponse(status_code=404, content=result)
+        data['group'] = group
+        gid = user_data['gidnumber'][0]
+        if user_data['uidnumber'][0] == gid:
+            data['main_group'] = None
+        else:
+            group_info = ipa.group_find(o_gidnumber=gid)
+            data['main_group'] = jmespath.search('result[0].cn[0]', group_info) or None
+    except Exception as e:
+        result['result'] = False
+        result['error_msg'] = f'{str(e)}'
+        return JSONResponse(status_code=404, content=result)
+    try:
+        r = redis.Redis(connection_pool=conn)
+        j = r.json()
+    except Exception as e:
+        return {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+    jobs = []
+    for site_dict in config['site']:
+        site = site_dict['location']
+        check = check_expire(j, site)
+        if check['result'] is False:
+            return check
+        job_search = f'$.Jobs.*[?(@.euser=="{username}")].id'
+        job_list = j.get(site, job_search)
+        jobs.extend(job_list)
+    data['jobs'] = jobs
+    result['data'] = data
     return result

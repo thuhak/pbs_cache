@@ -4,6 +4,21 @@ location = "{{ location }}"
 user = "user"
 password = "password"
 
+[ipa]
+host = "ipa_host"
+user = "user"
+password = "password"
+
+[[site]]
+location = "l1"
+name = "s1"
+
+[[site]]
+location = "l2"
+name = "s2"
+
+
+
 [redis]
     [redis.hf]
     host = "10.2.3.4"
