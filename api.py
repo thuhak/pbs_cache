@@ -12,7 +12,7 @@ from typing import Union, List
 
 import jmespath
 import toml
-import redis.asyncio as redis
+import redis
 from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import JSONResponse
