@@ -8,6 +8,7 @@ from collections import Counter
 import subprocess
 import json
 import logging
+import statistics
 
 import redis
 import toml
@@ -85,12 +86,16 @@ class QueueInfo:
     def __init__(self, queue: str, host: int, socket: int, vnode: int):
         self.root = DevNode('cluster', 'root')
         self.name = queue
+        self.users = set()
+        self.job_size = []
         self.counter = Counter(min_cores=0,
                                max_cores=0,
                                waiting_cores=0,
                                offline_cores=0,
                                free_cores=0,
                                using_cores=0,
+                               running_jobs=0,
+                               waiting_jobs=0
                                )
         self.full_cores_map = {
             "host": host,
@@ -140,13 +145,18 @@ class QueueInfo:
             l = 0.0
         return l
 
+    @property
+    def job_size_avg(self):
+        return 0 if not self.job_size else statistics.mean(self.job_size)
+
     def export(self) -> dict:
         """
         dump queue info to dict
         """
-        result = {'queue': self.name}
+        result = {'queue': self.name, 'user_count': len(self.users)}
         result.update(self.counter)
         result['free_cores_group'] = self.root.free_cores_group()
+        result['job_size_avg'] = self.job_size_avg
         result['load'] = self.load
         return result
 
@@ -199,9 +209,13 @@ def pbs_data_ex() -> dict:
         state = job_data['job_state']
         cores = jmespath.search('Resource_List.ncpus', job_data) or 0
         if state == 'R':
-            queue.counter.update(using_cores=cores)
+            queue.counter.update(using_cores=cores, running_jobs=1)
         elif state == 'Q':
-            queue.counter.update(waiting_cores=cores)
+            queue.counter.update(waiting_cores=cores, waiting_jobs=1)
+        user = job_data['euser']
+        queue.users.add(user)
+        jobsize = jmespath.search('Resource_List.ncpus', job_data) or 0
+        queue.job_size.append(jobsize)
         pbs_jobs['Jobs'].pop(job)
         pbs_jobs['Jobs'][trans_key(job)] = job_data
     # update raw data
