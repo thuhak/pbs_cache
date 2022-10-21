@@ -49,13 +49,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     log_level = getattr(logging, args.log_level.upper())
     logging.basicConfig(level=log_level)
-    logging.info('start syncing pbs data')
-    try:
-        with open(args.config) as f:
-            config = toml.load(f)
-    except Exception as e:
-        logging.error(f"can not load configuration: {str(e)}")
-        exit(-1)
+    with open(args.config) as f:
+        config = toml.load(f)
     data = load_app_data(args.app_path)
     if args.test:
         print(json.dumps(data, indent=True))
@@ -66,4 +61,3 @@ if __name__ == '__main__':
     r = redis.Redis(connection_pool=conn)
     j = r.json()
     j.set('app', '$', data)
-
