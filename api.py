@@ -6,13 +6,13 @@ pbs cache restful api
 import secrets
 import time
 import logging
-from enum import Enum
 import json
+from enum import Enum
 from typing import Union, List
 
 import jmespath
 import toml
-import redis
+import redis.asyncio as redis
 from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import JSONResponse
@@ -157,8 +157,6 @@ def get_data(site: Site, subject: Subject, name: str, item: Union[List[str], Non
         if item:
             search_str += f'.{json.dumps(item)}'
 
-        print(item)
-        print(f'searching expression:{search_str}')
         logger.debug(f'searching expression:{search_str}')
         data = j.get(f'pbs_{site}', search_str)
         result['data'] = data
@@ -191,7 +189,6 @@ def get_user_info(username: str, info: UserInfo = UserInfo.groups, cred=Depends(
     """
     result = {'result': True}
     data = {}
-    print(info)
     if info is UserInfo.groups:
         try:
             ipa.login(config['ipa']['user'], config['ipa']['password'])
@@ -229,4 +226,34 @@ def get_user_info(username: str, info: UserInfo = UserInfo.groups, cred=Depends(
             jobs.extend(job_list)
         data['jobs'] = jobs
     result['data'] = data
+    return result
+
+
+@app.get('/app')
+def get_app_list(cred=Depends(get_current_username)):
+    """
+    get application list in nio HPC
+    """
+    result = {'result': True}
+    try:
+        r = redis.Redis(connection_pool=conn)
+        j = r.json()
+        result['data'] = j.get('app', '$.*.Name')
+    except Exception as e:
+        result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+    return result
+
+
+@app.get('/app/{name}')
+def get_app_info(name: str, cred=Depends(get_current_username)):
+    """
+    get app info
+    """
+    result = {'result': True}
+    try:
+        r = redis.Redis(connection_pool=conn)
+        j = r.json()
+        result['data'] = j.get('app', f'$.{name}')
+    except Exception as e:
+        result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
     return result

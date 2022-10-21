@@ -1,6 +1,7 @@
 [Unit]
 Description=save pbs data to cache
 After=redis.service
+Requires=redis.service
 
 [Service]
 Type=oneshot
