@@ -65,7 +65,7 @@ def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
 
 def check_expire(j, site):
     result = {'result': True}
-    timestamp = j.get(site, '.timestamp')
+    timestamp = j.get(f'pbs_{site}', '.timestamp')
     if not timestamp:
         result['result'] = False
         result['error_msg'] = f'invalid site {site}'
@@ -96,7 +96,7 @@ def get_full_data(site: Site, cred=Depends(get_current_username)):
         check = check_expire(j, site)
         if check['result'] is False:
             return check
-        data = j.get(site, '$')
+        data = j.get(f'pbs_{site}', '$')
         result['data'] = data
     except Exception as e:
         result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
@@ -116,7 +116,7 @@ def get_list(site: Site, subject: Subject, cred=Depends(get_current_username)):
         check = check_expire(j, site)
         if check['result'] is False:
             return check
-        data = j.get(site, f'.{subject.name}')
+        data = j.get(f'pbs_{site}', f'.{subject.name}')
         keys = list(data.keys())
         if subject is Subject.Jobs:
             result['count'] = len(keys)
@@ -160,7 +160,7 @@ def get_data(site: Site, subject: Subject, name: str, item: Union[List[str], Non
         print(item)
         print(f'searching expression:{search_str}')
         logger.debug(f'searching expression:{search_str}')
-        data = j.get(site, search_str)
+        data = j.get(f'pbs_{site}', search_str)
         result['data'] = data
     except Exception as e:
         result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
@@ -225,7 +225,7 @@ def get_user_info(username: str, info: UserInfo = UserInfo.groups, cred=Depends(
             if check['result'] is False:
                 return check
             job_search = f'$.Jobs.*[?(@.euser=="{username}")].id'
-            job_list = j.get(site, job_search)
+            job_list = j.get(f'pbs_{site}', job_search)
             jobs.extend(job_list)
         data['jobs'] = jobs
     result['data'] = data

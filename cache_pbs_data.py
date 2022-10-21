@@ -16,6 +16,7 @@ import jmespath
 parser = ArgumentParser(description=__doc__)
 parser.add_argument('-c', '--config', default='/etc/pbs_cache.toml', help='config file')
 parser.add_argument('-l', '--log_level', choices=['debug', 'info', 'error'], default='info', help='debug level')
+parser.add_argument('-t', '--test', action='store_true', help='test mode')
 replacement = [('.', '_'), ('[', '_'), (']', '')]
 
 
@@ -226,11 +227,14 @@ if __name__ == '__main__':
     location = config['location']
     conns = [(redis.ConnectionPool(**conf), host) for host, conf in config['redis'].items()]
     data = pbs_data_ex()
+    if args.test:
+        print(json.dumps(data, indent=True))
+        exit(0)
     for con, host in conns:
         logging.info(f'saving data in {host}')
         try:
             r = redis.Redis(connection_pool=con)
             j = r.json()
-            j.set(location, '$', data)
+            j.set(f'pbs_{location}', '$', data)
         except Exception as e:
             logging.error(f'redis at {host} error: {str(e)}')
