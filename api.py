@@ -1,7 +1,7 @@
 #!/usr/bin/env python3.8
 # author: thuhak.zhou@nio.com
 """
-pbs cache restful api
+hpc restful api
 """
 import secrets
 import time
@@ -12,7 +12,7 @@ from typing import Union, List
 
 import jmespath
 import toml
-import redis
+import redis.asyncio as redis
 from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import JSONResponse
@@ -26,7 +26,7 @@ location = config['location']
 redis_conf = config['redis'][location]
 logger = logging.getLogger()
 ipa = ClientMeta(config['ipa']['host'], verify_ssl=False)
-conn = redis.ConnectionPool(**redis_conf)
+conn = redis.Redis(**redis_conf, auto_close_connection_pool=False)
 replacement = [('.', '_'), ('[', '_'), (']', '')]
 
 
@@ -35,11 +35,6 @@ class Subject(Enum):
     Queue = 'Queue'
     Jobs = 'Jobs'
     nodes = 'nodes'
-
-
-class UserInfo(Enum):
-    jobs = 'jobs'
-    groups = 'groups'
 
 
 Site = Enum('Site', {k['location']: k['location'] for k in config['site']})
@@ -63,16 +58,21 @@ def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
     return credentials.username
 
 
-def check_expire(j, site):
+async def check_expire(j, site):
     result = {'result': True}
-    timestamp = j.get(f'pbs_{site}', '.timestamp')
+    timestamp = await j.get(f'pbs_{site}', '.timestamp')
     if not timestamp:
         result['result'] = False
-        result['error_msg'] = f'invalid site {site}'
+        result['msg'] = f'invalid site {site}'
     elif time.time() - timestamp > 120:
         result['result'] = False
-        result['error_msg'] = 'pbs info too old'
+        result['msg'] = 'pbs info too old'
     return result
+
+
+@app.on_event('shutdown')
+async def shutdown():
+    await conn.close()
 
 
 @app.get('/pbs')
@@ -84,39 +84,37 @@ def get_site_list(cred=Depends(get_current_username)):
 
 
 @app.get('/pbs/{site}')
-def get_full_data(site: Site, cred=Depends(get_current_username)):
+async def get_full_data(site: Site, cred=Depends(get_current_username)):
     """
     get all data of site
     """
     result = {'result': True}
     site = site.name
     try:
-        r = redis.Redis(connection_pool=conn)
-        j = r.json()
-        check = check_expire(j, site)
+        j = conn.json()
+        check = await check_expire(j, site)
         if check['result'] is False:
             return check
-        data = j.get(f'pbs_{site}', '$')
+        data = await j.get(f'pbs_{site}', '$')
         result['data'] = data
     except Exception as e:
-        result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+        result = {'result': False, 'msg': f'backend failure, {str(e)}'}
     return result
 
 
 @app.get('/pbs/{site}/{subject}')
-def get_list(site: Site, subject: Subject, cred=Depends(get_current_username)):
+async def get_list(site: Site, subject: Subject, cred=Depends(get_current_username)):
     """
     get all data for the specified subject
     """
     result = {'result': True}
     site = site.name
     try:
-        r = redis.Redis(connection_pool=conn)
-        j = r.json()
-        check = check_expire(j, site)
+        j = conn.json()
+        check = await check_expire(j, site)
         if check['result'] is False:
             return check
-        data = j.get(f'pbs_{site}', f'.{subject.name}')
+        data = await j.get(f'pbs_{site}', f'.{subject.name}')
         keys = list(data.keys())
         if subject is Subject.Jobs:
             result['count'] = len(keys)
@@ -130,12 +128,12 @@ def get_list(site: Site, subject: Subject, cred=Depends(get_current_username)):
         else:
             result['data'] = list(data.values())[0]
     except Exception as e:
-        result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+        result = {'result': False, 'msg': f'backend failure, {str(e)}'}
     return result
 
 
 @app.get('/pbs/{site}/{subject}/{name}')
-def get_data(site: Site, subject: Subject, name: str, item: Union[List[str], None] = Query(default=None),
+async def get_data(site: Site, subject: Subject, name: str, item: Union[List[str], None] = Query(default=None),
              cred=Depends(get_current_username)):
     """
     get detail data
@@ -144,9 +142,8 @@ def get_data(site: Site, subject: Subject, name: str, item: Union[List[str], Non
     site = site.name
     name = trans_key(name)
     try:
-        r = redis.Redis(connection_pool=conn)
-        j = r.json()
-        check = check_expire(j, site)
+        j = conn.json()
+        check = await check_expire(j, site)
         if check['result'] is False:
             return check
         root = '$' if name == '*' or item else ''
@@ -158,10 +155,10 @@ def get_data(site: Site, subject: Subject, name: str, item: Union[List[str], Non
             search_str += f'.{json.dumps(item)}'
 
         logger.debug(f'searching expression:{search_str}')
-        data = j.get(f'pbs_{site}', search_str)
+        data = await j.get(f'pbs_{site}', search_str)
         result['data'] = data
     except Exception as e:
-        result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+        result = {'result': False, 'msg': f'backend failure, {str(e)}'}
     return result
 
 
@@ -177,83 +174,86 @@ def get_user_list(group: str = 'hpc', cred=Depends(get_current_username)):
         result['data'] = jmespath.search('result.member_user', user_info)
     except Exception as e:
         result['result'] = False
-        result['error_msg'] = f'{str(e)}'
+        result['msg'] = f'{str(e)}'
         return JSONResponse(status_code=404, content=result)
     return result
 
 
 @app.get('/user/{username}')
-def get_user_info(username: str, info: UserInfo = UserInfo.groups, cred=Depends(get_current_username)):
+def get_user_info(username: str, cred=Depends(get_current_username)):
     """
     get user data
     """
     result = {'result': True}
     data = {}
-    if info is UserInfo.groups:
-        try:
-            ipa.login(config['ipa']['user'], config['ipa']['password'])
-            user_data = ipa.user_show(username)['result']
-            group = user_data.get('memberof_group', []) + user_data.get('memberofindirect_group', [])
-            if 'hpc' not in group:
-                result['result'] = False
-                result['error_msg'] = 'invalid user'
-                return JSONResponse(status_code=404, content=result)
-            data['group'] = group
-            gid = user_data['gidnumber'][0]
-            if user_data['uidnumber'][0] == gid:
-                data['main_group'] = None
-            else:
-                group_info = ipa.group_find(o_gidnumber=gid)
-                data['main_group'] = jmespath.search('result[0].cn[0]', group_info) or None
-        except Exception as e:
+    try:
+        ipa.login(config['ipa']['user'], config['ipa']['password'])
+        user_data = ipa.user_show(username)['result']
+        group = user_data.get('memberof_group', []) + user_data.get('memberofindirect_group', [])
+        if 'hpc' not in group:
             result['result'] = False
-            result['error_msg'] = f'{str(e)}'
+            result['msg'] = 'invalid user'
             return JSONResponse(status_code=404, content=result)
-    elif info is UserInfo.jobs:
-        try:
-            r = redis.Redis(connection_pool=conn)
-            j = r.json()
-        except Exception as e:
-            return {'result': False, 'error_msg': f'backend failure, {str(e)}'}
-        jobs = []
-        for site_dict in config['site']:
-            site = site_dict['location']
-            check = check_expire(j, site)
-            if check['result'] is False:
-                return check
-            job_search = f'$.Jobs.*[?(@.euser=="{username}")].id'
-            job_list = j.get(f'pbs_{site}', job_search)
-            jobs.extend(job_list)
+        data['group'] = group
+        gid = user_data['gidnumber'][0]
+        if user_data['uidnumber'][0] == gid:
+            data['main_group'] = None
+        else:
+            group_info = ipa.group_find(o_gidnumber=gid)
+            data['main_group'] = jmespath.search('result[0].cn[0]', group_info) or None
+        result['data'] = data
+    except Exception as e:
+        result['result'] = False
+        result['msg'] = f'{str(e)}'
+        return JSONResponse(status_code=404, content=result)
+    return result
+
+
+@app.get('/user/{username}/jobs')
+async def get_user_jobs(username: str, cred=Depends(get_current_username)):
+    result = {'result': True}
+    data = {}
+    try:
+        j = conn.json()
+    except Exception as e:
+        return {'result': False, 'msg': f'backend failure, {str(e)}'}
+    jobs = []
+    for site_dict in config['site']:
+        site = site_dict['location']
+        check = await check_expire(j, site)
+        if check['result'] is False:
+            return check
+        job_search = f'$.Jobs.*[?(@.euser=="{username}")].id'
+        job_list = await j.get(f'pbs_{site}', job_search)
+        jobs.extend(job_list)
         data['jobs'] = jobs
     result['data'] = data
     return result
 
 
 @app.get('/app')
-def get_app_list(cred=Depends(get_current_username)):
+async def get_app_list(cred=Depends(get_current_username)):
     """
     get application list in nio HPC
     """
     result = {'result': True}
     try:
-        r = redis.Redis(connection_pool=conn)
-        j = r.json()
-        result['data'] = j.get('app', '$.*.Name')
+        j = conn.json()
+        result['data'] = await j.get('app', '$.*.Name')
     except Exception as e:
-        result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+        result = {'result': False, 'msg': f'backend failure, {str(e)}'}
     return result
 
 
 @app.get('/app/{name}')
-def get_app_info(name: str, cred=Depends(get_current_username)):
+async def get_app_info(name: str, cred=Depends(get_current_username)):
     """
     get app info
     """
     result = {'result': True}
     try:
-        r = redis.Redis(connection_pool=conn)
-        j = r.json()
-        result['data'] = j.get('app', f'$.{name}')
+        j = conn.json()
+        result['data'] = await j.get('app', f'$.{name}')
     except Exception as e:
-        result = {'result': False, 'error_msg': f'backend failure, {str(e)}'}
+        result = {'result': False, 'msg': f'backend failure, {str(e)}'}
     return result
