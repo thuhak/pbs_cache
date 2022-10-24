@@ -78,25 +78,71 @@ class DevNode:
             return sorted([c for c in cores if c != 0], reverse=True)
 
 
-class QueueInfo:
-    """
-    pbs queue info
-    """
-
-    def __init__(self, queue: str, host: int, socket: int, vnode: int):
-        self.root = DevNode('cluster', 'root')
-        self.name = queue
+class BaseStat:
+    def __init__(self):
         self.users = set()
         self.job_size = []
-        self.counter = Counter(min_cores=0,
-                               max_cores=0,
-                               waiting_cores=0,
+        self.counter = Counter(waiting_cores=0,
                                offline_cores=0,
                                free_cores=0,
                                using_cores=0,
                                running_jobs=0,
                                waiting_jobs=0
                                )
+
+    @property
+    def load(self) -> float:
+        """
+        load = (using_cores + waiting_cores)/(using_cores + free_cores)
+        """
+        using_cores = self.counter['using_cores']
+        waiting_cores = self.counter['waiting_cores']
+        free_cores = self.counter['free_cores']
+        try:
+            l = round((using_cores + waiting_cores) / (using_cores + free_cores), 2)
+        except ZeroDivisionError:
+            l = 0.0
+        return l
+
+    @property
+    def job_size_avg(self):
+        return 0.0 if not self.job_size else round(statistics.mean(self.job_size), 2)
+
+    def export(self) -> dict:
+        result = {'user_count': len(self.users)}
+        result.update(self.counter)
+        result['job_size_avg'] = self.job_size_avg
+        result['load'] = self.load
+        return result
+
+
+class ServerInfo(BaseStat):
+    """
+    pbs server info
+    """
+
+    def __init__(self):
+        super(ServerInfo, self).__init__()
+        self.counter.update(total_cores=0)
+
+    def add_vnode(self, all_cores: int, assigned_cores: int, is_offline: bool):
+        self.counter.update(total_cores=all_cores)
+        if is_offline:
+            self.counter.update(offline_cores=all_cores)
+        free_cores = all_cores - assigned_cores
+        self.counter.update(free_cores=free_cores)
+
+
+class QueueInfo(BaseStat):
+    """
+    pbs queue info
+    """
+
+    def __init__(self, queue: str, host: int, socket: int, vnode: int):
+        super(QueueInfo, self).__init__()
+        self.root = DevNode('cluster', 'root')
+        self.name = queue
+        self.counter.update(min_cores=0, max_cores=0)
         self.full_cores_map = {
             "host": host,
             "socket": socket,
@@ -131,33 +177,13 @@ class QueueInfo:
                 cur_node.add_child(node)
                 cur_node = node
 
-    @property
-    def load(self) -> float:
-        """
-        queue load = (using_cores + waiting_cores)/(using_cores + free_cores)
-        """
-        using_cores = self.counter['using_cores']
-        waiting_cores = self.counter['waiting_cores']
-        free_cores = self.counter['free_cores']
-        try:
-            l = round((using_cores + waiting_cores) / (using_cores + free_cores), 2)
-        except ZeroDivisionError:
-            l = 0.0
-        return l
-
-    @property
-    def job_size_avg(self):
-        return 0.0 if not self.job_size else round(statistics.mean(self.job_size), 2)
-
     def export(self) -> dict:
         """
         dump queue info to dict
         """
-        result = {'queue': self.name, 'user_count': len(self.users)}
-        result.update(self.counter)
+        result = super(QueueInfo, self).export()
+        result['queue'] = self.name
         result['free_cores_group'] = self.root.free_cores_group()
-        result['job_size_avg'] = self.job_size_avg
-        result['load'] = self.load
         return result
 
 
@@ -171,7 +197,8 @@ def pbs_data_ex() -> dict:
     pbs_nodes = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/pbsnodes -avj -F json'))
     pbs_jobs = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -f -F json'))
     logging.debug('parsing pbs data')
-    extra_data = {}
+    server_info = ServerInfo()
+    extra_queue_data = {}
     for q, queue_data in pbs_queues["Queue"].items():
         queue_config = jmespath.search(
             'resources_available.{host: ncpu_perhost, vnode: ncpu_pernode, socket: ncpu_pernuma}', queue_data)
@@ -181,7 +208,7 @@ def pbs_data_ex() -> dict:
         queue_data['name'] = q
         queue_data['apps'] = get_resource_list('App', queue_data)
         queue_data['teams'] = get_resource_list('Team', queue_data)
-        extra_data[q] = QueueInfo(q, **queue_config)
+        extra_queue_data[q] = QueueInfo(q, **queue_config)
     for vnode, node_data in pbs_nodes["nodes"].copy().items():
         if q := node_data.get('queue'):
             queues = [q]
@@ -195,31 +222,39 @@ def pbs_data_ex() -> dict:
         devices = jmespath.search('resources_available.{ibswitch: ibswitch, host: host, socket: numa, vnode: vnode}',
                                   node_data)
         is_offline = node_data.get('state') == 'offline'
+        server_info.add_vnode(all_cores, assigned_cores, is_offline)
         for q in queues:
-            if queue := extra_data.get(q):
+            if queue := extra_queue_data.get(q):
                 queue.add_vnode(all_cores, assigned_cores, is_offline, is_private, **devices)
         pbs_nodes['nodes'][trans_key(vnode)] = pbs_nodes['nodes'].pop(vnode)
     for job, job_data in pbs_jobs['Jobs'].copy().items():
         job_data['id'] = job
         q = job_data["queue"]
-        if q not in extra_data:
+        if q not in extra_queue_data:
             logging.error(f'queue {q} is not well configured')
             continue
-        queue = extra_data[q]
+        queue = extra_queue_data[q]
         state = job_data['job_state']
         cores = jmespath.search('Resource_List.ncpus', job_data) or 0
         if state == 'R':
+            server_info.counter.update(using_cores=cores, running_jobs=1)
             queue.counter.update(using_cores=cores, running_jobs=1)
         elif state == 'Q':
+            server_info.counter.update(waiting_cores=cores, waiting_jobs=1)
             queue.counter.update(waiting_cores=cores, waiting_jobs=1)
         user = job_data['euser']
         queue.users.add(user)
+        server_info.users.add(user)
         jobsize = jmespath.search('Resource_List.ncpus', job_data) or 0
         queue.job_size.append(jobsize)
+        server_info.job_size.append(jobsize)
         pbs_jobs['Jobs'].pop(job)
         pbs_jobs['Jobs'][trans_key(job)] = job_data
-    # update raw data
-    for q, queue_info in extra_data.items():
+    # update server data
+    for d in pbs_server['Server'].values():
+        d['statistics'] = server_info.export()
+    # update queue data
+    for q, queue_info in extra_queue_data.items():
         adv_data = queue_info.export()
         logging.debug(f'queue {q} statistics:')
         logging.debug(json.dumps(adv_data, indent=True))
