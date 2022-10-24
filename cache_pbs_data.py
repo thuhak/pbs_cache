@@ -147,7 +147,7 @@ class QueueInfo:
 
     @property
     def job_size_avg(self):
-        return 0 if not self.job_size else statistics.mean(self.job_size)
+        return 0.0 if not self.job_size else round(statistics.mean(self.job_size), 2)
 
     def export(self) -> dict:
         """
