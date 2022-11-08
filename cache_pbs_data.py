@@ -93,6 +93,7 @@ class BaseStat:
                                waiting_jobs=0,
                                free_gpus=0,
                                using_gpus=0,
+                               waiting_gpus=0,
                                offline_gpus=0
                                )
 
