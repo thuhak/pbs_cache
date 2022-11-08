@@ -5,6 +5,7 @@ save pbs data into redis cache
 """
 from argparse import ArgumentParser
 from collections import Counter
+from typing import List
 import subprocess
 import json
 import logging
@@ -51,11 +52,13 @@ class DevNode:
     ibswitch, host, socket, vnode
     """
 
-    def __init__(self, dev_type, name, full_cores=None):
+    def __init__(self, dev_type, name, full_cores=None, full_gpus=None):
         self.type = dev_type
         self.name = name
         self.full_cores = full_cores
+        self.full_gpus = full_gpus
         self.unused_cores = 0
+        self.unused_gpus = 0
         self.children = {}
 
     def add_child(self, node):
@@ -64,13 +67,13 @@ class DevNode:
     def has_child(self, name) -> bool:
         return name in self.children
 
-    def free_cores_group(self) -> [int]:
+    def free_cores_group(self, gpu=False) -> List[int]:
         if self.type == 'vnode':
-            return [self.unused_cores]
+            return [self.unused_gpus if gpu else self.unused_cores]
         else:
             cores = [0]
             for c in self.children.values():
-                c_free = c.free_cores_group()
+                c_free = c.free_cores_group(gpu)
                 if sum(c_free) == c.full_cores:
                     cores[0] += c.full_cores
                 else:
@@ -87,7 +90,10 @@ class BaseStat:
                                free_cores=0,
                                using_cores=0,
                                running_jobs=0,
-                               waiting_jobs=0
+                               waiting_jobs=0,
+                               free_gpus=0,
+                               using_gpus=0,
+                               offline_gpus=0
                                )
 
     @property
@@ -124,13 +130,15 @@ class ServerInfo(BaseStat):
     def __init__(self):
         super(ServerInfo, self).__init__()
         self.counter.update(total_cores=0)
+        self.counter.update(total_gpus=0)
 
-    def add_vnode(self, all_cores: int, assigned_cores: int, is_offline: bool):
-        self.counter.update(total_cores=all_cores)
+    def add_vnode(self, all_cores: int, assigned_cores: int, all_gpus: int, assigned_gpus: int, is_offline: bool):
+        self.counter.update(total_cores=all_cores, total_gpus=all_gpus)
         if is_offline:
-            self.counter.update(offline_cores=all_cores)
+            self.counter.update(offline_cores=all_cores, offline_gpus=all_gpus)
         free_cores = all_cores - assigned_cores
-        self.counter.update(free_cores=free_cores)
+        free_gpus = all_gpus - assigned_gpus
+        self.counter.update(free_cores=free_cores, free_gpus=free_gpus)
 
 
 class QueueInfo(BaseStat):
@@ -138,29 +146,35 @@ class QueueInfo(BaseStat):
     pbs queue info
     """
 
-    def __init__(self, queue: str, host: int, socket: int, vnode: int):
+    def __init__(self, queue: str, host: int, socket: int, vnode: int, gpus_vnode: int):
         super(QueueInfo, self).__init__()
         self.root = DevNode('cluster', 'root')
         self.name = queue
-        self.counter.update(min_cores=0, max_cores=0)
+        self.counter.update(min_cores=0, max_cores=0, min_gpus=0, max_gpus=0)
         self.full_cores_map = {
             "host": host,
             "socket": socket,
-            "vnode": vnode
+            "vnode": vnode,
         }
+        self.full_gpus_map = {'vnode': gpus_vnode,
+                              'socket': socket * gpus_vnode // vnode,
+                              'host': host * gpus_vnode // vnode
+                              }
 
-    def add_vnode(self, all_cores: int, assigned_cores: int, is_offline: bool, is_private: bool, **devices):
+    def add_vnode(self, all_cores: int, assigned_cores: int, all_gpus: int, assigned_gpus: int, is_offline: bool,
+                  is_private: bool, **devices):
         if is_offline:
-            self.counter.update(offline_cores=all_cores)
-            self.counter.update(max_cores=assigned_cores)
+            self.counter.update(offline_cores=all_cores, offline_gpus=all_gpus)
+            self.counter.update(max_cores=assigned_cores, max_gpus=assigned_gpus)
             if is_private:
-                self.counter.update(min_cores=assigned_cores)
+                self.counter.update(min_cores=assigned_cores, min_gpus=assigned_gpus)
             return
-        self.counter.update(max_cores=all_cores)
+        self.counter.update(max_cores=all_cores, max_gpus=all_gpus)
         if is_private:
-            self.counter.update(min_cores=all_cores)
+            self.counter.update(min_cores=all_cores, min_gpus=all_gpus)
         free_cores = all_cores - assigned_cores
-        self.counter.update(free_cores=free_cores)
+        free_gpus = all_gpus - assigned_gpus
+        self.counter.update(free_cores=free_cores, free_gpus=free_gpus)
         if free_cores == 0:
             return
         cur_node = self.root
@@ -171,9 +185,11 @@ class QueueInfo(BaseStat):
             if cur_node.has_child(dev_name):
                 cur_node = cur_node.children[dev_name]
             else:
-                node = DevNode(dev_type, dev_name, full_cores=self.full_cores_map.get(dev_type, 0))
+                node = DevNode(dev_type, dev_name, full_cores=self.full_cores_map.get(dev_type, 0),
+                               full_gpus=self.full_gpus_map.get(dev_type, 0))
                 if dev_type == 'vnode':
                     node.unused_cores = free_cores
+                    node.unused_gpus = free_gpus
                 cur_node.add_child(node)
                 cur_node = node
 
@@ -184,6 +200,7 @@ class QueueInfo(BaseStat):
         result = super(QueueInfo, self).export()
         result['queue'] = self.name
         result['free_cores_group'] = self.root.free_cores_group()
+        result['free_gpus_group'] = self.root.free_cores_group(gpu=True)
         return result
 
 
@@ -199,16 +216,17 @@ def pbs_data_ex() -> dict:
     logging.debug('parsing pbs data')
     server_info = ServerInfo()
     extra_queue_data = {}
+    # queue init
     for q, queue_data in pbs_queues["Queue"].items():
-        queue_config = jmespath.search(
-            'resources_available.{host: ncpu_perhost, vnode: ncpu_pernode, socket: ncpu_pernuma}', queue_data)
-        if not queue_config:
-            logging.warning(f'queue {q} is not well configured')
-            continue
+        raw = jmespath.search(
+            'resources_available.{host: ncpu_perhost, vnode: ncpu_pernode, socket: ncpu_pernuma, gpus_vnode: ncpu_pernode}',
+            queue_data)
+        queue_config = {k: v or 0 for k, v in raw.items()}
         queue_data['name'] = q
         queue_data['apps'] = get_resource_list('App', queue_data)
         queue_data['teams'] = get_resource_list('Team', queue_data)
         extra_queue_data[q] = QueueInfo(q, **queue_config)
+    # add node info to queue
     for vnode, node_data in pbs_nodes["nodes"].copy().items():
         if q := node_data.get('queue'):
             queues = [q]
@@ -219,14 +237,17 @@ def pbs_data_ex() -> dict:
         is_private = len(queues) == 1
         all_cores = jmespath.search('resources_available.ncpus', node_data)
         assigned_cores = jmespath.search('resources_assigned.ncpus', node_data) or 0
+        all_gpus = jmespath.search('resources_available.ngpus', node_data) or 0
+        assigned_gpus = jmespath.search('resources_assigned.ngpus', node_data) or 0
         devices = jmespath.search('resources_available.{ibswitch: ibswitch, host: host, socket: numa, vnode: vnode}',
                                   node_data)
         is_offline = node_data.get('state') == 'offline'
-        server_info.add_vnode(all_cores, assigned_cores, is_offline)
+        server_info.add_vnode(all_cores, assigned_cores, all_gpus, assigned_gpus, is_offline)
         for q in queues:
             if queue := extra_queue_data.get(q):
-                queue.add_vnode(all_cores, assigned_cores, is_offline, is_private, **devices)
+                queue.add_vnode(all_cores, assigned_cores, all_gpus, assigned_gpus, is_offline, is_private, **devices)
         pbs_nodes['nodes'][trans_key(vnode)] = pbs_nodes['nodes'].pop(vnode)
+    # add job info to queue
     for job, job_data in pbs_jobs['Jobs'].copy().items():
         job_data['id'] = job
         q = job_data["queue"]
@@ -235,13 +256,13 @@ def pbs_data_ex() -> dict:
             continue
         queue = extra_queue_data[q]
         state = job_data['job_state']
-        cores = jmespath.search('Resource_List.ncpus', job_data) or 0
+        cores, gpus = [n or 0 for n in jmespath.search('Resource_List.[ncpus, ngpus]', job_data)]
         if state == 'R':
-            server_info.counter.update(using_cores=cores, running_jobs=1)
-            queue.counter.update(using_cores=cores, running_jobs=1)
+            server_info.counter.update(using_cores=cores, running_jobs=1, using_gpus=gpus)
+            queue.counter.update(using_cores=cores, running_jobs=1, using_gpus=gpus)
         elif state == 'Q':
-            server_info.counter.update(waiting_cores=cores, waiting_jobs=1)
-            queue.counter.update(waiting_cores=cores, waiting_jobs=1)
+            server_info.counter.update(waiting_cores=cores, waiting_jobs=1, waiting_gpus=gpus)
+            queue.counter.update(waiting_cores=cores, waiting_jobs=1, waiting_gpus=gpus)
         user = job_data['euser']
         queue.users.add(user)
         server_info.users.add(user)
