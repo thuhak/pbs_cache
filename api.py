@@ -76,7 +76,7 @@ async def shutdown():
 
 
 @app.get('/pbs')
-def get_site_list(cred=Depends(get_current_username)):
+async def get_site_list(cred=Depends(get_current_username)):
     """
     get HPC sites
     """
