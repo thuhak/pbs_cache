@@ -74,8 +74,11 @@ class DevNode:
             cores = [0]
             for c in self.children.values():
                 c_free = c.free_cores_group(gpu)
-                if sum(c_free) == c.full_cores:
-                    cores[0] += c.full_cores
+                if c.full_cores and sum(c_free) == c.full_cores:
+                    if self.type == 'ibswitch':
+                        cores[0] += c.full_cores
+                    else:
+                        cores.append(c.full_cores)
                 else:
                     cores.extend(c_free)
             return sorted([c for c in cores if c != 0], reverse=True)
