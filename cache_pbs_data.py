@@ -74,11 +74,9 @@ class DevNode:
             cores = [0]
             for c in self.children.values():
                 c_free = c.free_cores_group(gpu)
-                if c.full_cores and sum(c_free) == c.full_cores:
-                    if self.type == 'ibswitch':
-                        cores[0] += c.full_cores
-                    else:
-                        cores.append(c.full_cores)
+                full_cores = c.full_gpus if gpu else c.full_cores
+                if full_cores and sum(c_free) == full_cores and self.type != 'cluster':
+                    cores[0] += full_cores
                 else:
                     cores.extend(c_free)
             return sorted([c for c in cores if c != 0], reverse=True)
@@ -223,7 +221,7 @@ def pbs_data_ex() -> dict:
     # queue init
     for q, queue_data in pbs_queues["Queue"].items():
         raw = jmespath.search(
-            'resources_available.{host: ncpu_perhost, vnode: ncpu_pernode, socket: ncpu_pernuma, gpus_vnode: ncpu_pernode}',
+            'resources_available.{host: ncpu_perhost, vnode: ncpu_pernode, socket: ncpu_pernuma, gpus_vnode: ngpu_pernode}',
             queue_data)
         queue_config = {k: v or 0 for k, v in raw.items()}
         queue_data['name'] = q
