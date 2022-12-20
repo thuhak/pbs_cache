@@ -214,7 +214,7 @@ def pbs_data_ex() -> dict:
     pbs_server = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Bf -F json'))
     pbs_queues = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Qf -F json'))
     pbs_nodes = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/pbsnodes -avj -F json'))
-    pbs_jobs = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -f -F json'))
+    pbs_jobs = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -fx -F json'))
     logging.debug('parsing pbs data')
     server_info = ServerInfo()
     extra_queue_data = {}
@@ -262,15 +262,15 @@ def pbs_data_ex() -> dict:
         if state == 'R':
             server_info.counter.update(using_cores=cores, running_jobs=1, using_gpus=gpus)
             queue.counter.update(using_cores=cores, running_jobs=1, using_gpus=gpus)
+            user = job_data['euser']
+            queue.users.add(user)
+            server_info.users.add(user)
+            jobsize = jmespath.search('Resource_List.ncpus', job_data) or 0
+            queue.job_size.append(jobsize)
+            server_info.job_size.append(jobsize)
         elif state == 'Q':
             server_info.counter.update(waiting_cores=cores, waiting_jobs=1, waiting_gpus=gpus)
             queue.counter.update(waiting_cores=cores, waiting_jobs=1, waiting_gpus=gpus)
-        user = job_data['euser']
-        queue.users.add(user)
-        server_info.users.add(user)
-        jobsize = jmespath.search('Resource_List.ncpus', job_data) or 0
-        queue.job_size.append(jobsize)
-        server_info.job_size.append(jobsize)
         pbs_jobs['Jobs'].pop(job)
         pbs_jobs['Jobs'][trans_key(job)] = job_data
     # update server data
@@ -305,7 +305,7 @@ if __name__ == '__main__':
     for con, host in conns:
         logging.info(f'saving data in {host}')
         try:
-            r = redis.Redis(connection_pool=con)
+            r = redis.Redis(connection_pool=con, socket_timeout=5, socket_connect_timeout=2)
             j = r.json()
             j.set(f'pbs_{location}', '$', data)
         except Exception as e:
