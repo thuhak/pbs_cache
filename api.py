@@ -4,7 +4,6 @@
 hpc restful api
 """
 import secrets
-import time
 import logging
 import json
 from enum import Enum
@@ -58,18 +57,6 @@ def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
     return credentials.username
 
 
-async def check_expire(j, site):
-    result = {'result': True}
-    timestamp = await j.get(f'pbs_{site}', '.timestamp')
-    if not timestamp:
-        result['result'] = False
-        result['msg'] = f'invalid site {site}'
-    elif time.time() - timestamp > 120:
-        result['result'] = False
-        result['msg'] = 'pbs info too old'
-    return result
-
-
 @app.on_event('shutdown')
 async def shutdown():
     await conn.close()
@@ -92,9 +79,6 @@ async def get_full_data(site: Site, cred=Depends(get_current_username)):
     site = site.name
     try:
         j = conn.json()
-        check = await check_expire(j, site)
-        if check['result'] is False:
-            return check
         data = await j.get(f'pbs_{site}', '$')
         result['data'] = data
     except Exception as e:
@@ -111,9 +95,6 @@ async def get_list(site: Site, subject: Subject, cred=Depends(get_current_userna
     site = site.name
     try:
         j = conn.json()
-        check = await check_expire(j, site)
-        if check['result'] is False:
-            return check
         data = await j.get(f'pbs_{site}', f'.{subject.name}')
         keys = list(data.keys())
         if subject is Subject.Jobs:
@@ -143,9 +124,6 @@ async def get_data(site: Site, subject: Subject, name: str, item: Union[List[str
     name = trans_key(name)
     try:
         j = conn.json()
-        check = await check_expire(j, site)
-        if check['result'] is False:
-            return check
         root = '$' if name == '*' or item else ''
         if subject is Subject.nodes:
             search_str = f'$.nodes.*[?(@.Mom=="{name}")]'
@@ -220,9 +198,6 @@ async def get_user_jobs(username: str, cred=Depends(get_current_username)):
     jobs = []
     for site_dict in config['site']:
         site = site_dict['location']
-        check = await check_expire(j, site)
-        if check['result'] is False:
-            return check
         job_search = f'$.Jobs.*[?(@.euser=="{username}")].id'
         job_list = await j.get(f'pbs_{site}', job_search)
         jobs.extend(job_list)
