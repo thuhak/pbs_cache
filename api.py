@@ -71,7 +71,7 @@ async def get_site_list(cred=Depends(get_current_username)):
 
 
 @app.get('/pbs/{site}')
-async def get_full_data(site: Site, cred=Depends(get_current_username)):
+async def get_site_info(site: Site, cred=Depends(get_current_username)):
     """
     get all data of site
     """
@@ -79,10 +79,12 @@ async def get_full_data(site: Site, cred=Depends(get_current_username)):
     site = site.name
     try:
         j = conn.json()
-        data = await j.get(f'pbs_{site}', '$')
-        result['data'] = data
+        timestamp = await j.get(f'pbs_{site}', '.timestamp')
+        result['timestamp'] = int(timestamp)
+        result['name'] = [s['name'] for s in config['site'] if s['location'] == site][0]
     except Exception as e:
-        result = {'result': False, 'msg': f'backend failure, {str(e)}'}
+        result['result'] = False
+        result['msg'] = f'backend failure, {str(e)}'
     return result
 
 
