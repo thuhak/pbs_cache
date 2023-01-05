@@ -243,7 +243,7 @@ def pbs_data_ex() -> dict:
         assigned_gpus = jmespath.search('resources_assigned.ngpus', node_data) or 0
         devices = jmespath.search('resources_available.{ibswitch: ibswitch, host: host, socket: numa, vnode: vnode}',
                                   node_data)
-        is_offline = node_data.get('state') == 'offline'
+        is_offline = node_data.get('state') in ('offline', 'down')
         server_info.add_vnode(all_cores, assigned_cores, all_gpus, assigned_gpus, is_offline)
         for q in queues:
             if queue := extra_queue_data.get(q):
