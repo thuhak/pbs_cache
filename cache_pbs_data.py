@@ -214,7 +214,7 @@ def pbs_data_ex() -> dict:
     pbs_server = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Bf -F json'))
     pbs_queues = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -Qf -F json'))
     pbs_nodes = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/pbsnodes -avj -F json'))
-    pbs_jobs = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -fx -F json'))
+    pbs_jobs = safety_loads(subprocess.getoutput(f'/opt/pbs/bin/qstat -f -F json'))
     logging.debug('parsing pbs data')
     server_info = ServerInfo()
     extra_queue_data = {}
