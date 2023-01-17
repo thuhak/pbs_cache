@@ -206,31 +206,3 @@ async def get_user_jobs(username: str, cred=Depends(get_current_username)):
         data['jobs'] = jobs
     result['data'] = data
     return result
-
-
-@app.get('/app')
-async def get_app_list(cred=Depends(get_current_username)):
-    """
-    get application list in nio HPC
-    """
-    result = {'result': True}
-    try:
-        j = conn.json()
-        result['data'] = await j.get('app', '$.*.Name')
-    except Exception as e:
-        result = {'result': False, 'msg': f'backend failure, {str(e)}'}
-    return result
-
-
-@app.get('/app/{name}')
-async def get_app_info(name: str, cred=Depends(get_current_username)):
-    """
-    get app info
-    """
-    result = {'result': True}
-    try:
-        j = conn.json()
-        result['data'] = await j.get('app', f'$.{name}')
-    except Exception as e:
-        result = {'result': False, 'msg': f'backend failure, {str(e)}'}
-    return result
