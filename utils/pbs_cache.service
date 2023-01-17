@@ -6,7 +6,6 @@ ConditionPathExists=/etc/pbs_cache.toml
 
 [Service]
 WorkingDirectory=/opt/pbs_cache
-ExecStartPre=/opt/pbs_cache/venv/bin/python load_app_data.py
 ExecStart=/opt/pbs_cache/venv/bin/uvicorn --host 0.0.0.0 --workers 4 --port 8000 api:app
 RestartSec=30s
 Restart=on-failure
