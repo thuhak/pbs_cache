@@ -6,4 +6,5 @@ Requires=redis.service
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/pbs_cache
+TimeoutStartSec=60
 ExecStart=/opt/pbs_cache/venv/bin/python cache_pbs_data.py
