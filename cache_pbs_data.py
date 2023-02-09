@@ -22,11 +22,14 @@ parser.add_argument('-t', '--test', action='store_true', help='test mode')
 replacement = [('.', '_'), ('[', '_'), (']', '')]
 
 
-def safety_loads(data: str) -> dict:
+def safety_loads(data: str, max_retries=5) -> dict:
     """
     fix pbs error
     """
-    while True:
+    while max_retries > 0:
+        if not data:
+            logging.error("empty pbs data")
+            return {}
         try:
             d = json.loads(data)
             return d
@@ -34,6 +37,7 @@ def safety_loads(data: str) -> dict:
             l = data.split('\n')
             l.pop(e.lineno - 1)
             data = '\n'.join(l)
+            max_retries -= 1
 
 
 def trans_key(key: str) -> str:
@@ -220,16 +224,17 @@ def pbs_data_ex() -> dict:
     extra_queue_data = {}
     # queue init
     for q, queue_data in pbs_queues["Queue"].items():
-        raw = jmespath.search(
-            'resources_available.{host: ncpu_perhost, vnode: ncpu_pernode, socket: ncpu_pernuma, gpus_vnode: ngpu_pernode}',
-            queue_data)
+        if not (raw := jmespath.search(
+                'resources_available.{host: ncpu_perhost, vnode: ncpu_pernode, socket: ncpu_pernuma, gpus_vnode: ngpu_pernode}',
+                queue_data)):
+            continue
         queue_config = {k: v or 0 for k, v in raw.items()}
         queue_data['name'] = q
         queue_data['apps'] = get_resource_list('App', queue_data)
         queue_data['teams'] = get_resource_list('Team', queue_data)
         extra_queue_data[q] = QueueInfo(q, **queue_config)
     # add node info to queue
-    for vnode, node_data in pbs_nodes["nodes"].copy().items():
+    for vnode, node_data in pbs_nodes.get("nodes", {}).copy().items():
         if q := node_data.get('queue'):
             queues = [q]
         elif q := jmespath.search("resources_available.Qlist", node_data):
@@ -251,7 +256,7 @@ def pbs_data_ex() -> dict:
                 queue.add_vnode(all_cores, assigned_cores, all_gpus, assigned_gpus, is_offline, is_private, **devices)
         pbs_nodes['nodes'][trans_key(vnode)] = pbs_nodes['nodes'].pop(vnode)
     # add job info to queue
-    for job, job_data in pbs_jobs['Jobs'].copy().items():
+    for job, job_data in pbs_jobs.get('Jobs', {}).copy().items():
         job_data['id'] = job
         q = job_data["queue"]
         if q not in extra_queue_data:
