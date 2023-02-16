@@ -8,6 +8,7 @@ from collections import Counter
 from typing import List
 import subprocess
 import json
+import re
 import logging
 import statistics
 
@@ -20,6 +21,8 @@ parser.add_argument('-c', '--config', default='/etc/pbs_cache.toml', help='confi
 parser.add_argument('-l', '--log_level', choices=['debug', 'info', 'error'], default='info', help='debug level')
 parser.add_argument('-t', '--test', action='store_true', help='test mode')
 replacement = [('.', '_'), ('[', '_'), (']', '')]
+batch_state_pat = re.compile(
+    r'Queued:(?P<Queued>\d+) Running:(?P<Running>\d+) Exiting:(?P<Exiting>\d+) Expired:(?P<Expired>\d+)')
 
 
 def safety_loads(data: str, max_retries=5) -> dict:
@@ -265,15 +268,30 @@ def pbs_data_ex() -> dict:
         queue = extra_queue_data[q]
         state = job_data['job_state']
         cores, gpus = [n or 0 for n in jmespath.search('Resource_List.[ncpus, ngpus]', job_data)]
+        user = job_data['euser']
+        queue.users.add(user)
+        server_info.users.add(user)
+        jobsize = jmespath.search('Resource_List.ncpus', job_data) or 0
+        queue.job_size.append(jobsize)
+        server_info.job_size.append(jobsize)
         if state == 'R':
             server_info.counter.update(using_cores=cores, running_jobs=1, using_gpus=gpus)
             queue.counter.update(using_cores=cores, running_jobs=1, using_gpus=gpus)
-            user = job_data['euser']
-            queue.users.add(user)
-            server_info.users.add(user)
-            jobsize = jmespath.search('Resource_List.ncpus', job_data) or 0
-            queue.job_size.append(jobsize)
-            server_info.job_size.append(jobsize)
+        elif state == 'B':
+            try:
+                array_state_count = batch_state_pat.match(job_data.get('array_state_count')).groupdict()
+                running_count = int(array_state_count['Running'])
+                queued_count = int(array_state_count['Queued'])
+                count_dict = {'using_cores': running_count * cores,
+                              'running_jobs': running_count,
+                              'using_gpus': running_count * gpus,
+                              'waiting_cores': queued_count * cores,
+                              'waiting_jobs': queued_count,
+                              'waiting_gpus': queued_count * gpus}
+                server_info.counter.update(**count_dict)
+                queue.counter.update(**count_dict)
+            except Exception as e:
+                logging.error(f'batch job error, id {job}, error: {str(e)}')
         elif state == 'Q':
             server_info.counter.update(waiting_cores=cores, waiting_jobs=1, waiting_gpus=gpus)
             queue.counter.update(waiting_cores=cores, waiting_jobs=1, waiting_gpus=gpus)
