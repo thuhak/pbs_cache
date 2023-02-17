@@ -293,8 +293,15 @@ def pbs_data_ex() -> dict:
             except Exception as e:
                 logging.error(f'batch job error, id {job}, error: {str(e)}')
         elif state == 'Q':
-            server_info.counter.update(waiting_cores=cores, waiting_jobs=1, waiting_gpus=gpus)
-            queue.counter.update(waiting_cores=cores, waiting_jobs=1, waiting_gpus=gpus)
+            if queued_array := job_data.get('array_state_count'):
+                array_state_count = batch_state_pat.match(queued_array).groupdict()
+                waiting_jobs = int(array_state_count['Queued'])
+                waiting_cores = cores * waiting_jobs
+                waiting_gpus = gpus * waiting_jobs
+            else:
+                waiting_jobs, waiting_cores, waiting_gpus = 1, cores, cores
+            server_info.counter.update(waiting_cores=waiting_cores, waiting_jobs=waiting_jobs, waiting_gpus=waiting_gpus)
+            queue.counter.update(waiting_cores=waiting_cores, waiting_jobs=waiting_jobs, waiting_gpus=waiting_gpus)
         pbs_jobs['Jobs'].pop(job)
         pbs_jobs['Jobs'][trans_key(job)] = job_data
     # update server data
